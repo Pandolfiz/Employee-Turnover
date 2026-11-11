@@ -1,6 +1,6 @@
 # Employee Turnover — Survival Analysis
 
-[![tests](../../actions/workflows/tests.yml/badge.svg)](../../actions/workflows/tests.yml)
+[![tests](https://github.com/Pandolfiz/Employee-Turnover/actions/workflows/tests.yml/badge.svg)](https://github.com/Pandolfiz/Employee-Turnover/actions/workflows/tests.yml)
 
 **[English](#english) · [Português](#português)**
 
@@ -39,7 +39,7 @@ job and Big-Five-style personality variables. See the [data dictionary](data/REA
 
 ### Quick start
 ```bash
-git clone <this-repo-url> && cd <repo-folder>
+git clone https://github.com/Pandolfiz/Employee-Turnover.git && cd Employee-Turnover
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt    # also installs the local package in editable mode
