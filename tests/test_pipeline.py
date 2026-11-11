@@ -27,6 +27,14 @@ def test_clean_normalises_and_validates(df):
     assert set(df[config.EVENT_COL].unique()) <= {0, 1}
 
 
+def test_clean_fixes_cyrillic_homoglyphs(tmp_path):
+    raw = make_synthetic_turnover(n=5, seed=2)
+    raw["profession"] = "Finanсe"  # Cyrillic "с", as in the real file
+    path = tmp_path / "t.csv"
+    raw.to_csv(path, index=False, encoding="cp1251")
+    assert (data.clean(data.load_raw(path))["profession"] == "finance").all()
+
+
 def test_clean_rejects_missing_target():
     with pytest.raises(ValueError):
         data.clean(pd.DataFrame({"stag": [1.0]}))

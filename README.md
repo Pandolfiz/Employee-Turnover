@@ -43,7 +43,7 @@ git clone <this-repo-url> && cd <repo-folder>
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt    # also installs the local package in editable mode
-python scripts/download_data.py    # needs a Kaggle token, or save turnover.csv to data/raw/ manually
+python scripts/download_data.py    # kagglehub, no token needed for this public dataset
 jupyter lab notebooks/
 pytest                             # tests run on synthetic data, no download needed
 ```

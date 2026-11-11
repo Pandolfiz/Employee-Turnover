@@ -1,12 +1,12 @@
-"""Download turnover.csv from Kaggle into data/raw/.
+"""Download turnover.csv from Kaggle into data/raw/ using kagglehub.
 
-Requires a Kaggle API token: https://www.kaggle.com/settings -> "Create New Token",
-then save kaggle.json to ~/.kaggle/kaggle.json (Windows: C:\\Users\\<you>\\.kaggle\\kaggle.json).
+Public dataset: no Kaggle token is needed in most cases.
 
 Usage:
     python scripts/download_data.py
 """
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -20,18 +20,17 @@ def main() -> None:
         print(f"Already present: {config.RAW_FILE}")
         return
     try:
-        from kaggle.api.kaggle_api_extended import KaggleApi
+        import kagglehub
     except ImportError:
-        sys.exit("Install the Kaggle client first: pip install kaggle")
+        sys.exit("Install kagglehub first: pip install kagglehub")
 
-    api = KaggleApi()
-    api.authenticate()
+    path = Path(kagglehub.dataset_download(config.KAGGLE_DATASET))
+    src = next(path.rglob("turnover.csv"), None)
+    if src is None:
+        sys.exit(f"turnover.csv not found in {path}: {list(path.rglob('*'))}")
+
     config.DATA_RAW.mkdir(parents=True, exist_ok=True)
-    api.dataset_download_files(config.KAGGLE_DATASET, path=str(config.DATA_RAW), unzip=True)
-
-    if not config.RAW_FILE.exists():
-        found = list(config.DATA_RAW.glob("*.csv"))
-        sys.exit(f"Download finished but turnover.csv not found. CSVs in data/raw: {found}")
+    shutil.copy2(src, config.RAW_FILE)
     print(f"Saved to {config.RAW_FILE}")
 
 

@@ -7,7 +7,7 @@ The raw data is **not committed** to this repository. / Os dados brutos **não s
 [original blog post](https://edwvb.blogspot.com/2017/10/employee-turnover-how-to-predict-individual-risks-of-quitting.html)
 
 ```bash
-python scripts/download_data.py   # needs ~/.kaggle/kaggle.json
+python scripts/download_data.py   # uses kagglehub (no token needed)
 ```
 
 Or download `turnover.csv` manually and save it as `data/raw/turnover.csv`.

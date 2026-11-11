@@ -8,6 +8,6 @@ scikit-survival>=0.22
 jupyter
 ipykernel
 nbconvert
-kaggle
+kagglehub
 pytest
 -e .

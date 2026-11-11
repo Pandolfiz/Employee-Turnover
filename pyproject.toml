@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "jupyter", "ipykernel", "nbconvert", "kaggle"]
+dev = ["pytest", "jupyter", "ipykernel", "nbconvert", "kagglehub"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

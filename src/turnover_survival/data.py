@@ -23,7 +23,13 @@ def load_raw(path: str | Path = config.RAW_FILE) -> pd.DataFrame:
     try:
         return pd.read_csv(path)
     except UnicodeDecodeError:
-        return pd.read_csv(path, encoding="latin-1")
+        # The original file was produced in Russia (Windows-1251); e.g. "Finance" is
+        # stored with a Cyrillic "с" (byte 0xF1).
+        return pd.read_csv(path, encoding="cp1251")
+
+
+# Cyrillic letters that look identical to Latin ones (typed by mistake in the source file)
+_HOMOGLYPHS = str.maketrans("асеорхукмтнві", "aceopxykmthbi")
 
 
 def clean(df: pd.DataFrame, drop_duplicates: bool = True) -> pd.DataFrame:
@@ -36,7 +42,7 @@ def clean(df: pd.DataFrame, drop_duplicates: bool = True) -> pd.DataFrame:
         raise ValueError(f"Missing survival columns: {sorted(missing)}")
 
     for col in df.select_dtypes(include=["object", "string"]).columns:
-        df[col] = df[col].astype(str).str.strip().str.lower()
+        df[col] = df[col].astype(str).str.strip().str.lower().str.translate(_HOMOGLYPHS)
 
     df[config.DURATION_COL] = pd.to_numeric(df[config.DURATION_COL], errors="coerce")
     df[config.EVENT_COL] = pd.to_numeric(df[config.EVENT_COL], errors="coerce")
