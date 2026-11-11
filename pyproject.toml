@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "turnover-survival"
+version = "0.1.0"
+description = "Survival analysis of employee turnover (Kaplan-Meier, Cox PH, AFT, Random Survival Forest)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "seaborn>=0.13",
+    "scikit-learn>=1.3",
+    "lifelines>=0.27",
+    "scikit-survival>=0.22",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "jupyter", "ipykernel", "nbconvert", "kaggle"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::FutureWarning"]
