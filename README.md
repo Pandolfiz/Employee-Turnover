@@ -25,14 +25,20 @@ ignore that information and are biased; survival models use it correctly.
 ~1,129 employees, tenure in months (`stag`) and an exit indicator (`event`), plus demographic,
 job and Big-Five-style personality variables. See the [data dictionary](data/README.md).
 
+**Repeated profiles:** ~41% of rows share an identical 5-score personality profile with another
+row (groups of up to 5), most likely the same person in different jobs. Rows sharing a profile
+get the same `profile_id`, which is used for **grouped train/test splits** (no person on both sides)
+and **cluster-robust standard errors** in the Cox model.
+
 ### Methods
 | Notebook | Content |
 |---|---|
 | [01_eda](notebooks/01_eda.ipynb) | Censoring, tenure distribution, covariates |
 | [02_kaplan_meier](notebooks/02_kaplan_meier.ipynb) | Kaplan-Meier, Nelson-Aalen hazard, log-rank tests by group |
-| [03_cox_ph](notebooks/03_cox_ph.ipynb) | Penalised Cox PH (CV-tuned), hazard ratios, Schoenfeld PH diagnostics |
+| [03_cox_ph](notebooks/03_cox_ph.ipynb) | Penalised Cox PH (CV-tuned), cluster-robust hazard ratios, Schoenfeld PH diagnostics |
 | [04_parametric_aft](notebooks/04_parametric_aft.ipynb) | Weibull / log-normal / log-logistic AFT, time ratios |
-| [05_ml_and_evaluation](notebooks/05_ml_and_evaluation.ipynb) | Random Survival Forest, hold-out comparison (C-index, time-dependent AUC, integrated Brier score), 12-month risk scoring |
+| [05_ml_and_evaluation](notebooks/05_ml_and_evaluation.ipynb) | Random Survival Forest, single hold-out comparison (C-index, time-dependent AUC, integrated Brier score), 12-month risk scoring |
+| [06_robust_validation](notebooks/06_robust_validation.ipynb) | Leakage check (naive vs grouped CV), nested repeated grouped CV, corrected paired t-test between models, out-of-fold calibration at 12/24 months |
 
 ### Results
 > _To be filled after running the notebooks on the real data._
@@ -51,15 +57,15 @@ pytest                             # tests run on synthetic data, no download ne
 ### Project structure
 ```
 ├── data/                 raw/ & processed/ (git-ignored) + data dictionary
-├── notebooks/            01 → 05 analysis notebooks
+├── notebooks/            01 → 06 analysis notebooks
 ├── reports/figures/      figures saved by the notebooks
 ├── scripts/              download_data.py
 ├── src/turnover_survival/
 │   ├── config.py         paths, column roles, defaults
-│   ├── data.py           load, clean, rare-level lumping, one-hot design matrix, split
+│   ├── data.py           load, clean, profile_id, rare-level lumping, design matrix, grouped splits
 │   ├── nonparametric.py  Kaplan-Meier, Nelson-Aalen, log-rank
-│   ├── models.py         Cox PH, AFT models, Random Survival Forest
-│   ├── evaluation.py     C-index, time-dependent AUC, integrated Brier score
+│   ├── models.py         Cox PH (cluster-robust), AFT models, Random Survival Forest, grouped tuning
+│   ├── evaluation.py     metrics, nested repeated CV, corrected t-test, calibration
 │   └── synthetic.py      synthetic data with the same schema (tests only)
 └── tests/
 ```
@@ -85,12 +91,17 @@ Dataset [Employee Turnover](https://www.kaggle.com/datasets/davinwijaya/employee
 ~1.129 funcionários, tempo de casa em meses (`stag`) e indicador de saída (`event`), além de
 variáveis demográficas, do cargo e de personalidade. Veja o [dicionário de dados](data/README.md).
 
+**Perfis repetidos:** ~41% das linhas repetem exatamente o perfil de personalidade de outra linha
+(grupos de até 5), provavelmente a mesma pessoa em empregos diferentes. Essas linhas recebem o mesmo
+`profile_id`, usado para **divisões treino/teste agrupadas** e **erros-padrão robustos por cluster** no Cox.
+
 ### Métodos
 1. **EDA**: censura, distribuição do tempo de casa e covariáveis;
 2. **Kaplan-Meier e log-rank**: curvas de retenção e comparação entre grupos;
 3. **Cox PH penalizado**: hazard ratios ajustados e diagnóstico de riscos proporcionais (resíduos de Schoenfeld);
 4. **AFT paramétricos** (Weibull, log-normal, log-logística): *time ratios* e mediana prevista;
-5. **Random Survival Forest** e comparação no conjunto de teste (C-index, AUC dependente do tempo, Integrated Brier Score), mais um score de risco de saída em 12 meses.
+5. **Random Survival Forest** e comparação no conjunto de teste (C-index, AUC dependente do tempo, Integrated Brier Score), mais um score de risco de saída em 12 meses;
+6. **Validação robusta**: vazamento (CV ingênua vs agrupada), validação cruzada repetida e aninhada, t-test corrigido entre modelos e calibração *out-of-fold* em 12/24 meses.
 
 ### Resultados
 > _A preencher após rodar os notebooks com os dados reais._

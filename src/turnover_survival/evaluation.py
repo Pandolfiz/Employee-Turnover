@@ -1,19 +1,24 @@
-"""Out-of-sample evaluation: concordance, time-dependent AUC and integrated Brier score."""
+"""Out-of-sample evaluation: single split, repeated grouped CV, model comparison and calibration."""
 
 from __future__ import annotations
 
+from typing import Callable
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from lifelines.utils import concordance_index
+from lifelines import KaplanMeierFitter
+from scipy import stats
 from sksurv.metrics import cumulative_dynamic_auc, integrated_brier_score
 
 from . import config
-from .data import to_structured_y
-from .models import features
+from .data import folds, to_structured_y
+from .models import cindex, features, risk_score
 
 T, E = config.DURATION_COL, config.EVENT_COL
 
 
+# --------------------------------------------------------------------------- building blocks
 def evaluation_times(train: pd.DataFrame, test: pd.DataFrame, n: int = 20) -> np.ndarray:
     """Time grid strictly inside the follow-up range of both sets (required by sksurv metrics)."""
     lo = max(train[T].min(), test[T].min())
@@ -22,50 +27,186 @@ def evaluation_times(train: pd.DataFrame, test: pd.DataFrame, n: int = 20) -> np
     return np.linspace(max(lo, q[0]), min(hi, q[1]) - 1e-6, n)
 
 
-def _survival_matrix(model, X_test: pd.DataFrame, times: np.ndarray) -> np.ndarray:
-    """Predicted S(t | x) for each test row (rows) at each time in `times` (columns)."""
-    if hasattr(model, "predict_survival_function") and hasattr(model, "summary"):  # lifelines
-        sf = model.predict_survival_function(features(X_test), times=times)
-        return sf.T.to_numpy()
-    fns = model.predict_survival_function(features(X_test))  # sksurv
-    return np.vstack([fn(times) for fn in fns])
+def survival_matrix(model, X: pd.DataFrame, times) -> np.ndarray:
+    """Predicted S(t | x): one row per row of X, one column per time."""
+    times = np.atleast_1d(times)
+    if hasattr(model, "summary"):  # lifelines
+        return model.predict_survival_function(features(X), times=times).T.to_numpy()
+    return np.vstack([fn(times) for fn in model.predict_survival_function(features(X))])
 
 
-def _risk_score(model, X_test: pd.DataFrame) -> np.ndarray:
-    """Higher = higher risk of leaving."""
-    if hasattr(model, "predict_partial_hazard"):  # Cox
-        return model.predict_partial_hazard(features(X_test)).to_numpy().ravel()
-    if hasattr(model, "predict_median") and hasattr(model, "summary"):  # AFT
-        return -model.predict_expectation(features(X_test)).to_numpy().ravel()
-    return model.predict(features(X_test))  # sksurv: risk score
+def _within_follow_up(train: pd.DataFrame, test: pd.DataFrame) -> pd.DataFrame:
+    """Test rows observed before the last training time.
+
+    The censoring-weighted metrics (td-AUC, Brier) estimate the censoring distribution on the
+    training set and cannot extrapolate past its last observed time.
+    """
+    return test[test[T] < train[T].max()]
 
 
-def evaluate(models: dict, train: pd.DataFrame, test: pd.DataFrame) -> pd.DataFrame:
-    """Score several fitted models on a held-out set."""
+def score(model, train: pd.DataFrame, test: pd.DataFrame) -> dict:
+    """C-index (all test rows), mean time-dependent AUC and integrated Brier score on `test`."""
+    c = cindex(model, test)
+    test = _within_follow_up(train, test)
     times = evaluation_times(train, test)
     y_train, y_test = to_structured_y(train), to_structured_y(test)
-    rows = []
-    for name, model in models.items():
-        risk = _risk_score(model, test)
-        surv = _survival_matrix(model, test, times)
-        _, mean_auc = cumulative_dynamic_auc(y_train, y_test, risk, times)
-        rows.append(
-            {
-                "model": name,
-                "c_index": concordance_index(test[T], -risk, test[E]),
-                "mean_td_auc": mean_auc,
-                "integrated_brier": integrated_brier_score(y_train, y_test, surv, times),
-            }
-        )
-    return pd.DataFrame(rows).sort_values("c_index", ascending=False).reset_index(drop=True)
+    _, mean_auc = cumulative_dynamic_auc(y_train, y_test, risk_score(model, test), times)
+    return {
+        "c_index": c,
+        "mean_td_auc": mean_auc,
+        "integrated_brier": integrated_brier_score(
+            y_train, y_test, survival_matrix(model, test, times), times
+        ),
+    }
 
 
 def km_baseline_ibs(train: pd.DataFrame, test: pd.DataFrame) -> float:
     """Integrated Brier score of the covariate-free Kaplan-Meier curve (the 'no-skill' benchmark)."""
-    from lifelines import KaplanMeierFitter
-
+    test = _within_follow_up(train, test)
     times = evaluation_times(train, test)
-    kmf = KaplanMeierFitter().fit(train[T], train[E])
-    s = kmf.survival_function_at_times(times).to_numpy()
+    s = KaplanMeierFitter().fit(train[T], train[E]).survival_function_at_times(times).to_numpy()
     surv = np.tile(s, (len(test), 1))
     return integrated_brier_score(to_structured_y(train), to_structured_y(test), surv, times)
+
+
+def evaluate(models: dict, train: pd.DataFrame, test: pd.DataFrame) -> pd.DataFrame:
+    """Score several already-fitted models on a single held-out set."""
+    rows = [{"model": name, **score(m, train, test)} for name, m in models.items()]
+    return pd.DataFrame(rows).sort_values("c_index", ascending=False).reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------- repeated CV
+def cross_validate(
+    X: pd.DataFrame,
+    fitters: dict[str, Callable[[pd.DataFrame], object]],
+    n_splits: int = 5,
+    n_repeats: int = 3,
+    grouped: bool = True,
+    horizons: tuple[float, ...] = (12, 24),
+    seed: int = config.RANDOM_STATE,
+    verbose: bool = True,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Repeated (grouped) k-fold CV.
+
+    `fitters` maps a model name to a function `train_df -> fitted model`. Any hyper-parameter
+    tuning must happen *inside* that function (nested CV), so test folds stay untouched.
+
+    Returns
+    -------
+    scores : one row per (repeat, fold, model) with C-index, td-AUC, IBS (+ KM baseline IBS).
+    oof    : out-of-fold predicted P(leave by h) for each horizon, from the first repeat
+             (every row predicted exactly once) — used for calibration.
+    """
+    score_rows, oof_rows = [], []
+    for r in range(n_repeats):
+        for f, (tr_idx, te_idx) in enumerate(
+            folds(X, n_splits=n_splits, random_state=seed + r, grouped=grouped)
+        ):
+            train, test = X.iloc[tr_idx], X.iloc[te_idx]
+            km_ibs = km_baseline_ibs(train, test)
+            for name, fit in fitters.items():
+                model = fit(train)
+                score_rows.append(
+                    {"repeat": r, "fold": f, "model": name, "n_train": len(train),
+                     "n_test": len(test), **score(model, train, test), "km_ibs": km_ibs}
+                )
+                if r == 0:
+                    p_leave = 1 - survival_matrix(model, test, list(horizons))
+                    oof_rows.append(
+                        pd.DataFrame(p_leave, index=test.index,
+                                     columns=[f"p_leave_{h:g}" for h in horizons]).assign(model=name)
+                    )
+            if verbose:
+                print(f"repeat {r + 1}/{n_repeats} · fold {f + 1}/{n_splits} done")
+    return pd.DataFrame(score_rows), pd.concat(oof_rows)
+
+
+def summarize_cv(scores: pd.DataFrame) -> pd.DataFrame:
+    """Mean, std and 2.5-97.5% percentile range across folds for each model and metric."""
+    metrics = ["c_index", "mean_td_auc", "integrated_brier"]
+    g = scores.groupby("model")[metrics]
+    out = pd.concat(
+        {
+            "mean": g.mean(),
+            "std": g.std(),
+            "p2.5": g.quantile(0.025),
+            "p97.5": g.quantile(0.975),
+        },
+        axis=1,
+    ).swaplevel(axis=1)[metrics]
+    out[("integrated_brier", "km_baseline")] = scores.groupby("model")["km_ibs"].mean()
+    return out.sort_values(("c_index", "mean"), ascending=False)
+
+
+def corrected_paired_ttest(
+    scores: pd.DataFrame, model_a: str, model_b: str, metric: str = "c_index"
+) -> dict:
+    """Nadeau & Bengio corrected resampled t-test of model_a − model_b on `metric`.
+
+    The plain paired t-test across CV folds is over-confident because training sets overlap;
+    the correction inflates the variance by (1/J + n_test/n_train).
+    """
+    piv = scores.pivot_table(index=["repeat", "fold"], columns="model", values=metric)
+    d = (piv[model_a] - piv[model_b]).to_numpy()
+    J = len(d)
+    ratio = (scores["n_test"] / scores["n_train"]).mean()
+    var = d.var(ddof=1) * (1 / J + ratio)
+    t = d.mean() / np.sqrt(var)
+    p = 2 * stats.t.sf(abs(t), df=J - 1)
+    half = stats.t.ppf(0.975, df=J - 1) * np.sqrt(var)
+    return {
+        "comparison": f"{model_a} − {model_b}",
+        "metric": metric,
+        "mean_diff": d.mean(),
+        "ci95_low": d.mean() - half,
+        "ci95_high": d.mean() + half,
+        "share_folds_a_better": (d > 0).mean() if metric != "integrated_brier" else (d < 0).mean(),
+        "t": t,
+        "p_value": p,
+    }
+
+
+# --------------------------------------------------------------------------- calibration
+def calibration_table(
+    oof: pd.DataFrame, X: pd.DataFrame, horizon: float, n_bins: int = 5
+) -> pd.DataFrame:
+    """Predicted vs observed P(leave by `horizon`) per risk quantile bin, for each model.
+
+    Observed risk is 1 − Kaplan-Meier at `horizon` within the bin, so censoring is handled.
+    """
+    col = f"p_leave_{horizon:g}"
+    rows = []
+    for name, g in oof.groupby("model"):
+        bins = pd.qcut(g[col], n_bins, labels=False, duplicates="drop")
+        for b, gb in g.groupby(bins):
+            sub = X.loc[gb.index]
+            kmf = KaplanMeierFitter().fit(sub[T], sub[E])
+            obs = 1 - kmf.survival_function_at_times(horizon).iloc[0]
+            ci = kmf.confidence_interval_survival_function_.asof(horizon)
+            rows.append({"model": name, "bin": int(b) + 1, "n": len(gb),
+                         "predicted": gb[col].mean(), "observed": obs,
+                         "observed_low": 1 - ci.iloc[1], "observed_high": 1 - ci.iloc[0]})
+    tab = pd.DataFrame(rows)
+    tab["abs_error"] = (tab["predicted"] - tab["observed"]).abs()
+    return tab
+
+
+def calibration_summary(tab: pd.DataFrame) -> pd.DataFrame:
+    """Mean absolute calibration error per model (lower is better)."""
+    return (tab.groupby("model")["abs_error"].mean().rename("mean_abs_calibration_error")
+            .sort_values().to_frame())
+
+
+def plot_calibration(tab: pd.DataFrame, horizon: float, ax: plt.Axes | None = None) -> plt.Axes:
+    ax = ax or plt.subplots(figsize=(6, 6))[1]
+    for name, g in tab.groupby("model"):
+        ax.errorbar(g["predicted"], g["observed"],
+                    yerr=[g["observed"] - g["observed_low"], g["observed_high"] - g["observed"]],
+                    marker="o", capsize=3, label=name)
+    lim = max(tab["predicted"].max(), tab["observed_high"].max()) * 1.05
+    ax.plot([0, lim], [0, lim], ls="--", c="grey", lw=1)
+    ax.set(xlim=(0, lim), ylim=(0, lim), xlabel="Predicted P(leave)",
+           ylabel="Observed P(leave) (Kaplan-Meier)",
+           title=f"Calibration at {horizon:g} months (out-of-fold)")
+    ax.legend(fontsize=8)
+    return ax

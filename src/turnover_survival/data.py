@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold, train_test_split
 
 from . import config
 
@@ -53,7 +53,19 @@ def clean(df: pd.DataFrame, drop_duplicates: bool = True) -> pd.DataFrame:
     if drop_duplicates:
         df = df.drop_duplicates()
 
-    return df.reset_index(drop=True)
+    df = df.reset_index(drop=True)
+    return add_profile_id(df)
+
+
+def add_profile_id(df: pd.DataFrame) -> pd.DataFrame:
+    """Give rows with an identical personality profile the same `config.GROUP_COL` id."""
+    df = df.copy()
+    cols = [c for c in config.PERSONALITY_COLS if c in df]
+    if cols:
+        df[config.GROUP_COL] = df.groupby(cols, sort=True).ngroup()
+    else:
+        df[config.GROUP_COL] = np.arange(len(df))
+    return df
 
 
 def lump_rare_categories(
@@ -105,15 +117,43 @@ def make_design_matrix(
     X = pd.concat(parts, axis=1)
     X[config.DURATION_COL] = df[config.DURATION_COL].to_numpy()
     X[config.EVENT_COL] = df[config.EVENT_COL].to_numpy()
+    if config.GROUP_COL in df:
+        X[config.GROUP_COL] = df[config.GROUP_COL].to_numpy()
     return X
+
+
+def folds(
+    df: pd.DataFrame,
+    n_splits: int = 5,
+    random_state: int = config.RANDOM_STATE,
+    grouped: bool = True,
+):
+    """Yield (train_idx, test_idx) positional indices, stratified on the event.
+
+    With `grouped=True` (default) all rows sharing a `config.GROUP_COL` id land on the same side,
+    which prevents the same person appearing in both train and test (leakage).
+    """
+    y = df[config.EVENT_COL].to_numpy()
+    if grouped and config.GROUP_COL in df:
+        cv = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+        yield from cv.split(df, y, groups=df[config.GROUP_COL].to_numpy())
+    else:
+        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+        yield from cv.split(df, y)
 
 
 def split(
     df: pd.DataFrame,
     test_size: float = config.TEST_SIZE,
     random_state: int = config.RANDOM_STATE,
+    grouped: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Train/test split stratified on the event indicator."""
+    """Single train/test split, stratified on the event and (by default) grouped by profile."""
+    if grouped and config.GROUP_COL in df:
+        train_idx, test_idx = next(
+            folds(df, n_splits=round(1 / test_size), random_state=random_state)
+        )
+        return df.iloc[train_idx], df.iloc[test_idx]
     return train_test_split(
         df, test_size=test_size, random_state=random_state, stratify=df[config.EVENT_COL]
     )

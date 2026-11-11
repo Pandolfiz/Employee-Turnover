@@ -34,6 +34,12 @@ NUMERIC_COLS = [
     "novator",
 ]
 
+# ~41% of rows share an identical 5-score personality profile with another row (groups of
+# up to 5), so they are likely the same person / same test result. Rows sharing a profile get
+# the same GROUP_COL id: kept on the same side of every split and used for cluster-robust SEs.
+PERSONALITY_COLS = ["extraversion", "independ", "selfcontrol", "anxiety", "novator"]
+GROUP_COL = "profile_id"
+
 # Categories with fewer than this many rows are lumped into "other"
 MIN_CATEGORY_FREQ = 20
 
