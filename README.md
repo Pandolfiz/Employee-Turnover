@@ -38,7 +38,7 @@ and **cluster-robust standard errors** in the Cox model.
 | [03_cox_ph](notebooks/03_cox_ph.ipynb) | Penalised Cox PH (CV-tuned), cluster-robust hazard ratios, Schoenfeld PH diagnostics |
 | [04_parametric_aft](notebooks/04_parametric_aft.ipynb) | Weibull / log-normal / log-logistic AFT, time ratios |
 | [05_ml_and_evaluation](notebooks/05_ml_and_evaluation.ipynb) | Random Survival Forest, single hold-out comparison (C-index, time-dependent AUC, integrated Brier score), 12-month risk scoring |
-| [06_robust_validation](notebooks/06_robust_validation.ipynb) | Leakage check (naive vs grouped CV), nested repeated grouped CV, corrected paired t-test between models, out-of-fold calibration at 12/24 months |
+| [06_robust_validation](notebooks/06_robust_validation.ipynb) | Leakage-safe protocol: 80/20 grouped development / final hold-out split, naive vs grouped CV, shuffled-outcome negative control, nested repeated CV with fold-wise preprocessing, pre-registered model-selection rule, out-of-fold calibration, one-shot hold-out test with grouped-bootstrap CIs |
 
 ### Results
 > _To be filled after running the notebooks on the real data._
@@ -62,12 +62,12 @@ pytest                             # tests run on synthetic data, no download ne
 ├── scripts/              download_data.py
 ├── src/turnover_survival/
 │   ├── config.py         paths, column roles, defaults
-│   ├── data.py           load, clean, profile_id, rare-level lumping, design matrix, grouped splits
+│   ├── data.py           load, clean, profile_id, DesignMatrixBuilder (fit on train only), grouped splits
 │   ├── nonparametric.py  Kaplan-Meier, Nelson-Aalen, log-rank
 │   ├── models.py         Cox PH (cluster-robust), AFT models, Random Survival Forest, grouped tuning
-│   ├── evaluation.py     metrics, nested repeated CV, corrected t-test, calibration
+│   ├── evaluation.py     metrics, nested CV, leakage controls, model selection, hold-out, calibration
 │   └── synthetic.py      synthetic data with the same schema (tests only)
-└── tests/
+└── tests/                pipeline tests + data-leakage guards (shuffled-outcome control)
 ```
 
 ---
@@ -101,7 +101,7 @@ variáveis demográficas, do cargo e de personalidade. Veja o [dicionário de da
 3. **Cox PH penalizado**: hazard ratios ajustados e diagnóstico de riscos proporcionais (resíduos de Schoenfeld);
 4. **AFT paramétricos** (Weibull, log-normal, log-logística): *time ratios* e mediana prevista;
 5. **Random Survival Forest** e comparação no conjunto de teste (C-index, AUC dependente do tempo, Integrated Brier Score), mais um score de risco de saída em 12 meses;
-6. **Validação robusta**: vazamento (CV ingênua vs agrupada), validação cruzada repetida e aninhada, t-test corrigido entre modelos e calibração *out-of-fold* em 12/24 meses.
+6. **Validação sem vazamento**: divisão 80/20 agrupada entre desenvolvimento e teste final, CV ingênua vs agrupada, controle negativo com desfecho embaralhado, CV repetida e aninhada com pré-processamento por fold, regra de seleção pré-definida, calibração *out-of-fold* e teste final avaliado uma única vez (IC por bootstrap agrupado).
 
 ### Resultados
 > _A preencher após rodar os notebooks com os dados reais._

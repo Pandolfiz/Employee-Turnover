@@ -85,41 +85,89 @@ def lump_rare_categories(
     return df
 
 
-def make_design_matrix(
-    df: pd.DataFrame,
-    categorical: list[str] | None = None,
-    numeric: list[str] | None = None,
-    min_freq: int = config.MIN_CATEGORY_FREQ,
-    drop_first: bool = True,
-    reference_levels: dict[str, str] | None = None,
-) -> pd.DataFrame:
-    """Build a model-ready frame: one-hot categoricals + numerics + duration/event.
+class DesignMatrixBuilder:
+    """Fit/transform builder of the model-ready frame (one-hot categoricals + numerics).
 
-    The most frequent level of each categorical is used as the reference (dropped) level
-    unless `reference_levels` says otherwise, which makes hazard ratios easier to read.
+    Everything data-dependent — which levels are rare, which level is the reference — is
+    learned in `fit` and only applied in `transform`. Fit it on the training rows only, so no
+    information from the test rows leaks into preprocessing.
+
+    - Levels with < `min_freq` training rows are lumped into "other".
+    - The reference (dropped) level is the most frequent training level, unless given in
+      `reference_levels`; it makes hazard ratios read as "vs. the most common group".
+    - Levels unseen in training map to "other" (or to the reference if there is no "other").
     """
-    categorical = categorical if categorical is not None else [
-        c for c in config.CATEGORICAL_COLS if c in df
-    ]
-    numeric = numeric if numeric is not None else [c for c in config.NUMERIC_COLS if c in df]
-    reference_levels = reference_levels or {}
 
-    df = lump_rare_categories(df, categorical, min_freq=min_freq)
+    OTHER = "other"
 
-    parts = [df[numeric].astype(float)]
-    for col in categorical:
-        ref = reference_levels.get(col, df[col].value_counts().idxmax())
-        levels = [ref] + sorted(set(df[col].unique()) - {ref})
-        cat = pd.Categorical(df[col], categories=levels)
-        dummies = pd.get_dummies(cat, prefix=col, drop_first=drop_first, dtype=float)
-        parts.append(dummies)
+    def __init__(
+        self,
+        categorical: list[str] | None = None,
+        numeric: list[str] | None = None,
+        min_freq: int = config.MIN_CATEGORY_FREQ,
+        reference_levels: dict[str, str] | None = None,
+    ):
+        self.categorical = categorical
+        self.numeric = numeric
+        self.min_freq = min_freq
+        self.reference_levels = reference_levels or {}
 
-    X = pd.concat(parts, axis=1)
-    X[config.DURATION_COL] = df[config.DURATION_COL].to_numpy()
-    X[config.EVENT_COL] = df[config.EVENT_COL].to_numpy()
-    if config.GROUP_COL in df:
-        X[config.GROUP_COL] = df[config.GROUP_COL].to_numpy()
-    return X
+    def fit(self, df: pd.DataFrame) -> "DesignMatrixBuilder":
+        self.categorical_ = self.categorical if self.categorical is not None else [
+            c for c in config.CATEGORICAL_COLS if c in df
+        ]
+        self.numeric_ = self.numeric if self.numeric is not None else [
+            c for c in config.NUMERIC_COLS if c in df
+        ]
+        self.levels_: dict[str, list[str]] = {}
+        for col in self.categorical_:
+            counts = df[col].value_counts()
+            kept = counts[counts >= self.min_freq]
+            lumped = counts[counts < self.min_freq].sum()
+            counts_after = kept.copy()
+            if lumped:
+                counts_after[self.OTHER] = lumped
+            ref = self.reference_levels.get(col, counts_after.idxmax())
+            self.levels_[col] = [ref] + sorted(set(counts_after.index) - {ref})
+        self.n_fit_rows_ = len(df)
+        return self
+
+    def _map_levels(self, s: pd.Series, col: str) -> pd.Series:
+        levels = self.levels_[col]
+        fallback = self.OTHER if self.OTHER in levels else levels[0]
+        return s.where(s.isin(levels), fallback)
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        if not hasattr(self, "levels_"):
+            raise RuntimeError("DesignMatrixBuilder must be fitted before transform")
+        parts = [df[self.numeric_].astype(float)]
+        for col in self.categorical_:
+            cat = pd.Categorical(self._map_levels(df[col], col), categories=self.levels_[col])
+            dummies = pd.get_dummies(cat, prefix=col, drop_first=True, dtype=float)
+            dummies.index = df.index  # get_dummies on a Categorical resets the index
+            parts.append(dummies)
+        X = pd.concat(parts, axis=1)
+        for c in (config.DURATION_COL, config.EVENT_COL, config.GROUP_COL):
+            if c in df:
+                X[c] = df[c].to_numpy()
+        return X
+
+    def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        return self.fit(df).transform(df)
+
+
+def is_raw(df: pd.DataFrame) -> bool:
+    """True if `df` still has raw categorical columns (i.e. is not a design matrix yet)."""
+    return any(c in df for c in config.CATEGORICAL_COLS)
+
+
+def make_design_matrix(df: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    """Fit + transform on the same rows.
+
+    Fine for *inference* on the full dataset (hazard ratios). For any train/test evaluation use
+    `DesignMatrixBuilder().fit(train)` and `.transform(test)` instead.
+    """
+    return DesignMatrixBuilder(**kwargs).fit_transform(df)
 
 
 def folds(

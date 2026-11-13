@@ -55,6 +55,31 @@ def test_design_matrix_is_numeric_and_complete(X, df):
     assert f"coach_{top}" not in X.columns
 
 
+def test_builder_learns_only_from_train():
+    train = pd.DataFrame({"way": ["bus"] * 30 + ["car"] * 25 + ["foot"] * 5,
+                          "stag": 1.0, "event": 1})
+    # "foot" is rare in train but frequent in test; "boat" never appears in train
+    test = pd.DataFrame({"way": ["foot"] * 40 + ["boat"] * 3 + ["car"] * 2,
+                         "stag": 1.0, "event": 1})
+    b = data.DesignMatrixBuilder(categorical=["way"], numeric=[], min_freq=20).fit(train)
+    assert b.levels_["way"] == ["bus", "car", "other"]  # learned from train only
+    Xt = b.transform(test)
+    assert list(Xt.columns[:2]) == ["way_car", "way_other"]
+    assert Xt["way_other"].sum() == 43  # rare-in-train and unseen levels -> "other"
+    assert Xt.index.equals(test.index)
+    # refitting on train + test would learn different levels: the fit really ignores test
+    b2 = data.DesignMatrixBuilder(categorical=["way"], numeric=[], min_freq=20).fit(
+        pd.concat([train, test]))
+    assert b2.levels_["way"] != b.levels_["way"]
+
+
+def test_builder_preserves_index_on_subsets(df):
+    sub = df.sample(100, random_state=0)
+    X = data.DesignMatrixBuilder().fit(df).transform(sub)
+    assert X.index.equals(sub.index)
+    assert (X["age"] == sub["age"]).all()
+
+
 def test_km_and_logrank(df):
     kmf = nonparametric.fit_km(df)
     tbl = nonparametric.survival_at(kmf, [6, 12, 24])

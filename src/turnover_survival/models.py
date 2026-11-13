@@ -13,6 +13,7 @@ from lifelines import (
     LogNormalAFTFitter,
     WeibullAFTFitter,
 )
+from lifelines.exceptions import ConvergenceError
 from lifelines.statistics import proportional_hazard_test
 from lifelines.utils import concordance_index
 from sksurv.ensemble import RandomSurvivalForest
@@ -54,10 +55,15 @@ def _grid_search(X: pd.DataFrame, fit_fn, grid: list[dict], k: int, seed: int) -
     splits = list(folds(X, n_splits=k, random_state=seed))
     rows = []
     for params in grid:
-        scores = [
-            cindex(fit_fn(X.iloc[tr], **params), X.iloc[te]) for tr, te in splits
-        ]
+        try:
+            scores = [cindex(fit_fn(X.iloc[tr], **params), X.iloc[te]) for tr, te in splits]
+        except ConvergenceError as err:  # e.g. an unpenalised Cox on a small inner fold
+            warnings.warn(f"{params} failed to converge in inner CV and was skipped: {err}",
+                          stacklevel=2)
+            continue
         rows.append({**params, "cv_cindex_mean": np.mean(scores), "cv_cindex_std": np.std(scores)})
+    if not rows:
+        raise RuntimeError("no hyper-parameter setting converged")
     return pd.DataFrame(rows).sort_values("cv_cindex_mean", ascending=False).reset_index(drop=True)
 
 
@@ -116,7 +122,7 @@ def ph_assumption_table(cph: CoxPHFitter, X: pd.DataFrame) -> pd.DataFrame:
 
 def tune_cox_penalizer(
     X_train: pd.DataFrame,
-    penalizers: tuple[float, ...] = (0.0, 0.001, 0.01, 0.05, 0.1, 0.5),
+    penalizers: tuple[float, ...] = (0.001, 0.01, 0.05, 0.1, 0.5),
     l1_ratio: float = 0.0,
     k: int = 5,
     seed: int = config.RANDOM_STATE,
